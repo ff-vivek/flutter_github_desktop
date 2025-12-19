@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:ffi/ffi.dart';
 
 /// Service for loading platform-specific libgit2 binaries
 ///
@@ -33,11 +34,12 @@ class DynamicLibraryService {
 
   /// Initialize and load the platform-specific libgit2 library
   ///
+  /// Returns true if the library was successfully loaded; false otherwise.
   /// Safe to call multiple times (idempotent).
-  static Future<void> initialize() async {
+  static bool initialize() {
     if (_library != null) {
       debugPrint('[DynamicLibraryService] Already initialized');
-      return;
+      return true;
     }
 
     try {
@@ -50,13 +52,16 @@ class DynamicLibraryService {
       } else if (Platform.isLinux) {
         _library = _loadLinux();
       } else {
-        throw UnsupportedError('Platform ${Platform.operatingSystem} not supported');
+        debugPrint('[DynamicLibraryService] Unsupported platform: ${Platform.operatingSystem}');
+        return false;
       }
 
       debugPrint('[DynamicLibraryService] Successfully loaded libgit2');
+      return true;
     } catch (e) {
       debugPrint('[DynamicLibraryService] Failed to load libgit2: $e');
-      rethrow;
+      // Do not throw; return false so callers can gracefully degrade.
+      return false;
     }
   }
 
@@ -162,6 +167,46 @@ class DynamicLibraryService {
   static void dispose() {
     _library = null;
     debugPrint('[DynamicLibraryService] Disposed');
+  }
+
+  /// Log whether a native libgit2 library is available and probe a couple symbols.
+  ///
+  /// This does NOT attempt to load the library. Use initialize() for loading.
+  /// Safe to call from any isolate. On web, prints a friendly notice and returns.
+  static void logAvailability({bool probeSymbols = true}) {
+    // Guard web first so we don't touch dart:io Platform.*
+    if (kIsWeb) {
+      debugPrint('[DynamicLibraryService] Web detected: dart:ffi is unavailable. Native library not supported in web preview.');
+      return;
+    }
+
+    try {
+      debugPrint('[DynamicLibraryService] Availability check: platform=${Platform.operatingSystem}, isLoaded=${_library != null}');
+      if (_library == null) {
+        debugPrint('[DynamicLibraryService] Library is not loaded. Call initialize() in the worker isolate before Git operations.');
+        return;
+      }
+
+      if (!probeSymbols) return;
+
+      bool hasInit = false;
+      bool hasRepoOpen = false;
+      try {
+        _library!.lookup<NativeFunction<Int32 Function()>>('git_libgit2_init');
+        hasInit = true;
+      } catch (e) {
+        debugPrint('[DynamicLibraryService] Missing symbol git_libgit2_init: $e');
+      }
+      try {
+        _library!.lookup<NativeFunction<Int32 Function(Pointer<Pointer<Void>>, Pointer<Utf8>)>>('git_repository_open');
+        hasRepoOpen = true;
+      } catch (e) {
+        debugPrint('[DynamicLibraryService] Missing symbol git_repository_open: $e');
+      }
+      debugPrint('[DynamicLibraryService] Symbol probe: git_libgit2_init=${hasInit ? 'ok' : 'missing'}, git_repository_open=${hasRepoOpen ? 'ok' : 'missing'}');
+    } catch (e) {
+      debugPrint('[DynamicLibraryService] Availability check error: $e');
+    }
   }
 }
 

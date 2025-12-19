@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
@@ -327,18 +328,32 @@ class GitIsolateManager {
     // Send this isolate's SendPort back to main isolate
     mainSendPort.send(isolateReceivePort.sendPort);
 
-    debugPrint('[GitWorkerIsolate] Started and preparing libgit2');
+    debugPrint('[GitWorkerIsolate] Started (platform=${Platform.operatingSystem}) and preparing libgit2');
+
+    // Log current dynamic library availability before any init
+    DynamicLibraryService.logAvailability(probeSymbols: false);
 
     // Prepare libgit2 (FFI) once for this isolate
     try {
-      DynamicLibraryService.initialize();
-      // Call libgit2 global init once
-      final initCount = LibGit2Bindings.I.libgit2_init();
-      debugPrint('[GitWorkerIsolate] libgit2 initialized (count=$initCount)');
-      _ffiReady = true;
+      final ok = DynamicLibraryService.initialize();
+      if (!ok) {
+        debugPrint('[GitWorkerIsolate] libgit2 library unavailable. Running in degraded mode.');
+        _ffiReady = false;
+        // Notify main isolate about FFI availability
+        mainSendPort.send({'type': 'ffi_status', 'available': false, 'reason': 'Native libgit2 library not found or blocked by sandbox.'});
+      } else {
+        // After load, log symbol availability quickly
+        DynamicLibraryService.logAvailability(probeSymbols: true);
+        // Call libgit2 global init once (also validates symbol resolution)
+        final initCount = LibGit2Bindings.I.libgit2_init();
+        debugPrint('[GitWorkerIsolate] libgit2 initialized (count=$initCount)');
+        _ffiReady = true;
+        mainSendPort.send({'type': 'ffi_status', 'available': true});
+      }
     } catch (e, st) {
       debugPrint('[GitWorkerIsolate] libgit2 init failed: $e\n$st');
       _ffiReady = false;
+      mainSendPort.send({'type': 'ffi_status', 'available': false, 'reason': e.toString()});
     }
 
     // Listen for commands from main isolate

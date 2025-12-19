@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gitdesktop/core/git/git_isolate_manager.dart';
+import 'package:gitdesktop/core/git/dynamic_library_service.dart';
 import 'theme.dart';
 import 'nav.dart';
 
@@ -13,6 +14,9 @@ import 'nav.dart';
 /// - Material 3 theming with light/dark modes
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+    // Quick visibility into native library availability on startup
+    DynamicLibraryService.logAvailability(probeSymbols: false);
 
   // Initialize Git isolate manager (required before any Git operations)
   final gitManager = GitIsolateManager();
