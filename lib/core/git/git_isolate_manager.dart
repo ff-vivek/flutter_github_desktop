@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'dart:isolate';
+import 'dart:convert';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:gitdesktop/core/git/dynamic_library_service.dart';
@@ -9,19 +10,20 @@ import 'package:gitdesktop/core/git/credentials_provider.dart';
 
 /// Commands that can be sent to the Git isolate
 abstract class GitCommand {
-  const GitCommand();
+  final Map<String, GitCredentialInfo>? credentials; // host -> creds
+  const GitCommand({this.credentials});
 }
 
 /// Command to open a Git repository
 class OpenRepoCommand extends GitCommand {
   final String path;
-  const OpenRepoCommand(this.path);
+  const OpenRepoCommand(this.path, {super.credentials});
 }
 
 /// Command to get repository status
 class GetStatusCommand extends GitCommand {
   final String repoPath;
-  const GetStatusCommand(this.repoPath);
+  const GetStatusCommand(this.repoPath, {super.credentials});
 }
 
 /// Command to commit changes
@@ -29,7 +31,7 @@ class CommitCommand extends GitCommand {
   final String repoPath;
   final String message;
   final List<String> files;
-  const CommitCommand(this.repoPath, this.message, this.files);
+  const CommitCommand(this.repoPath, this.message, this.files, {super.credentials});
 }
 
 /// Command to push to remote
@@ -38,14 +40,14 @@ class PushCommand extends GitCommand {
   final String remote;
   final String branch;
   final bool force;
-  const PushCommand(this.repoPath, this.remote, this.branch, {this.force = false});
+  const PushCommand(this.repoPath, this.remote, this.branch, {this.force = false, super.credentials});
 }
 
 /// Command to fetch from remote
 class FetchCommand extends GitCommand {
   final String repoPath;
   final String remote;
-  const FetchCommand(this.repoPath, this.remote);
+  const FetchCommand(this.repoPath, this.remote, {super.credentials});
 }
 
 /// Command to pull (fast-forward only)
@@ -53,27 +55,27 @@ class PullCommand extends GitCommand {
   final String repoPath;
   final String remote;
   final String branch;
-  const PullCommand(this.repoPath, this.remote, this.branch);
+  const PullCommand(this.repoPath, this.remote, this.branch, {super.credentials});
 }
 
 /// Command to get diff for a file
 class GetDiffCommand extends GitCommand {
   final String repoPath;
   final String filePath;
-  const GetDiffCommand(this.repoPath, this.filePath);
+  const GetDiffCommand(this.repoPath, this.filePath, {super.credentials});
 }
 
 /// Command to get commit history
 class GetHistoryCommand extends GitCommand {
   final String repoPath;
   final int limit;
-  const GetHistoryCommand(this.repoPath, this.limit);
+  const GetHistoryCommand(this.repoPath, this.limit, {super.credentials});
 }
 
 /// Command to list remotes (names + URLs)
 class GetRemotesCommand extends GitCommand {
   final String repoPath;
-  const GetRemotesCommand(this.repoPath);
+  const GetRemotesCommand(this.repoPath, {super.credentials});
 }
 
 /// Command to add a remote
@@ -81,14 +83,14 @@ class AddRemoteCommand extends GitCommand {
   final String repoPath;
   final String name;
   final String url;
-  const AddRemoteCommand(this.repoPath, this.name, this.url);
+  const AddRemoteCommand(this.repoPath, this.name, this.url, {super.credentials});
 }
 
 /// Command to remove a remote
 class RemoveRemoteCommand extends GitCommand {
   final String repoPath;
   final String name;
-  const RemoveRemoteCommand(this.repoPath, this.name);
+  const RemoveRemoteCommand(this.repoPath, this.name, {super.credentials});
 }
 
 /// Command to set a remote's URL
@@ -96,20 +98,20 @@ class SetRemoteUrlCommand extends GitCommand {
   final String repoPath;
   final String name;
   final String url;
-  const SetRemoteUrlCommand(this.repoPath, this.name, this.url);
+  const SetRemoteUrlCommand(this.repoPath, this.name, this.url, {super.credentials});
 }
 
 /// Command to clone a repository
 class CloneRepoCommand extends GitCommand {
   final String url;
   final String destinationPath;
-  const CloneRepoCommand(this.url, this.destinationPath);
+  const CloneRepoCommand(this.url, this.destinationPath, {super.credentials});
 }
 
 /// Command to initialize a new repository
 class InitRepoCommand extends GitCommand {
   final String path;
-  const InitRepoCommand(this.path);
+  const InitRepoCommand(this.path, {super.credentials});
 }
 
 /// Command to shutdown the isolate
@@ -174,6 +176,11 @@ class GitIsolateManager {
   ReceivePort? _receivePort;
   bool _isInitialized = false;
 
+  final _progressController = StreamController<Map<String, dynamic>>.broadcast();
+
+  /// Stream of network and sideband progress updates from the background isolate
+  Stream<Map<String, dynamic>> get progressStream => _progressController.stream;
+
   /// Whether the isolate is initialized and ready
   bool get isInitialized => _isInitialized;
 
@@ -211,7 +218,9 @@ class GitIsolateManager {
       final completer = Completer<SendPort>();
       _receivePort!.listen((message) {
         if (message is SendPort) {
-          completer.complete(message);
+          if (!completer.isCompleted) completer.complete(message);
+        } else if (message is Map && message.containsKey('type')) {
+          _progressController.add(Map<String, dynamic>.from(message));
         }
       });
 
@@ -302,6 +311,7 @@ class GitIsolateManager {
 
       _isInitialized = false;
       debugPrint('[GitIsolateManager] Shutdown complete');
+      _progressController.close();
     }
   }
 
@@ -310,6 +320,7 @@ class GitIsolateManager {
   /// This runs on a separate thread and handles all FFI calls to libgit2.
   /// IMPORTANT: No Flutter UI code or BuildContext can be used here.
   static void _isolateEntryPoint(SendPort mainSendPort) {
+    _mainSendPort = mainSendPort;
     // Create ReceivePort for this isolate
     final isolateReceivePort = ReceivePort();
 
@@ -355,6 +366,9 @@ class GitIsolateManager {
   /// This is where all FFI calls to libgit2 happen.
   /// For now, returns mock data. In production, this will call FFI bindings.
   static GitResult<dynamic> _processCommand(GitCommand command) {
+    // Register any credentials provided with this command in the registry
+    _registerCredentials(command.credentials);
+
     // Route to handlers. Some use real libgit2 via FFI.
     if (command is OpenRepoCommand) {
       return _handleOpenRepo(command);
@@ -392,8 +406,27 @@ class GitIsolateManager {
     return GitResult<dynamic>.failure('Unknown command: ${command.runtimeType}');
   }
 
+  static void _registerCredentials(Map<String, GitCredentialInfo>? creds) {
+    if (creds == null) return;
+    creds.forEach((host, info) {
+      final provider = CredentialsProvider(
+        personalAccessToken: info.personalAccessToken,
+        username: info.username,
+        sshPrivateKeyPath: info.sshPrivateKeyPath,
+        sshPublicKeyPath: info.sshPublicKeyPath,
+        sshPassphrase: info.sshPassphrase,
+      );
+      if (host == '*') {
+        CredentialsRegistry.registerGlobal(provider);
+      } else {
+        CredentialsRegistry.registerForHost(host, provider);
+      }
+    });
+  }
+
   // Isolate-scoped state and FFI helpers
   static bool _ffiReady = false;
+  static SendPort? _mainSendPort;
   static final Map<String, Pointer<git_repository>> _repos = {};
 
   // Error helpers
@@ -513,7 +546,8 @@ class GitIsolateManager {
 
   static int _diffLineCallback(Pointer<Void> delta, Pointer<Void> hunk, Pointer<git_diff_line> linePtr, Pointer<Void> payload) {
     try {
-      final id = payload.cast<Int64>().value;
+      final idPtr = payload.cast<Int64>();
+      final id = idPtr.value;
       final coll = _diffCollectors[id];
       if (coll == null) return 0;
 
@@ -524,7 +558,7 @@ class GitIsolateManager {
       String content = '';
       if (line.content.address != 0 && len > 0) {
         final bytes = line.content.cast<Uint8>().asTypedList(len);
-        content = String.fromCharCodes(bytes);
+        content = utf8.decode(bytes, allowMalformed: true);
         if (content.endsWith('\n')) content = content.substring(0, content.length - 1);
         if (content.endsWith('\r')) content = content.substring(0, content.length - 1);
       }
@@ -535,9 +569,13 @@ class GitIsolateManager {
       }
 
       String type = 'context';
-      if (origin == '+') type = 'added';
-      else if (origin == '-') type = 'deleted';
-      else if (origin == ' ') type = 'context';
+      if (origin == '+') {
+        type = 'added';
+      } else if (origin == '-') {
+        type = 'deleted';
+      } else if (origin == ' ') {
+        type = 'context';
+      }
       coll.addLine(type, content, line.old_lineno, line.new_lineno);
       return 0;
     } catch (e) {
@@ -545,6 +583,60 @@ class GitIsolateManager {
       return -1;
     }
   }
+
+  // Network progress callbacks
+  static NativeCallable<GitTransferProgressCbNative>? _transferProgressCb;
+  static NativeCallable<GitSidebandProgressCbNative>? _sidebandProgressCb;
+
+  static const int _kNetworkCbError = -1;
+
+  static Pointer<NativeFunction<GitTransferProgressCbNative>> _getTransferProgressCallbackPtr() {
+    _transferProgressCb ??= NativeCallable<GitTransferProgressCbNative>.isolateLocal(
+      _transferProgressCallback,
+      exceptionalReturn: _kNetworkCbError,
+    );
+    return _transferProgressCb!.nativeFunction;
+  }
+
+  static Pointer<NativeFunction<GitSidebandProgressCbNative>> _getSidebandProgressCallbackPtr() {
+    _sidebandProgressCb ??= NativeCallable<GitSidebandProgressCbNative>.isolateLocal(
+      _sidebandProgressCallback,
+      exceptionalReturn: _kNetworkCbError,
+    );
+    return _sidebandProgressCb!.nativeFunction;
+  }
+
+  static int _transferProgressCallback(Pointer<git_transfer_progress> stats, Pointer<Void> payload) {
+    if (_mainSendPort != null) {
+      final s = stats.ref;
+      // Send a side-channel message (not the final result)
+      _mainSendPort!.send({
+        'type': 'network_progress',
+        'total_objects': s.total_objects,
+        'indexed_objects': s.indexed_objects,
+        'received_objects': s.received_objects,
+        'received_bytes': s.received_bytes,
+      });
+    }
+    return 0;
+  }
+
+  static int _sidebandProgressCallback(Pointer<Int8> str, int len, Pointer<Void> payload) {
+    if (_mainSendPort != null && str.address != 0 && len > 0) {
+      final bytes = str.cast<Uint8>().asTypedList(len);
+      final message = utf8.decode(bytes, allowMalformed: true).trim();
+      if (message.isNotEmpty) {
+        _mainSendPort!.send({
+          'type': 'sideband_progress',
+          'message': message,
+        });
+      }
+    }
+    return 0;
+  }
+
+  // Error helpers
+
 
   /// Collector for status categories (use sets to avoid duplicates)
 
@@ -810,8 +902,18 @@ class GitIsolateManager {
         ..count = 1;
 
       debugPrint('[GitWorkerIsolate] Push refspec: $refspec');
-      final rcP = LibGit2Bindings.I.remote_push(remote, arr, Pointer.fromAddress(0));
-      if (rcP != 0) return GitResult<void>.failure(_formatGitError('Push', rcP, remoteHandle: remote, remoteName: cmd.remote));
+      
+      final pushOpts = calloc<git_push_options>();
+      try {
+        LibGit2Bindings.I.push_init_options(pushOpts, 1);
+        pushOpts.ref.callbacks.credentials = CredentialsProvider.getSharedCallbackPointer();
+        pushOpts.ref.callbacks.version = 1;
+
+        final rcP = LibGit2Bindings.I.remote_push(remote, arr, pushOpts);
+        if (rcP != 0) return GitResult<void>.failure(_formatGitError('Push', rcP, remoteHandle: remote, remoteName: cmd.remote));
+      } finally {
+        calloc.free(pushOpts);
+      }
 
       // Basic progress summary if available
       try {
@@ -906,16 +1008,24 @@ class GitIsolateManager {
       // Log auth context
       _logAuthContextForRemote(remote);
 
-      // Use defaults: NULL refspecs (remote default), NULL options, NULL reflog message
-      debugPrint('[GitWorkerIsolate] Fetch start: remote=${cmd.remote}');
-      final rcFetch = LibGit2Bindings.I.remote_fetch(
-        remote,
-        Pointer.fromAddress(0),
-        Pointer.fromAddress(0),
-        Pointer.fromAddress(0),
-      );
-      if (rcFetch != 0) {
-        return GitResult<void>.failure(_formatGitError('Fetch', rcFetch, remoteHandle: remote, remoteName: cmd.remote));
+      final fetchOpts = calloc<git_fetch_options>();
+      try {
+        LibGit2Bindings.I.fetch_init_options(fetchOpts, 1);
+        fetchOpts.ref.callbacks.credentials = CredentialsProvider.getSharedCallbackPointer();
+        fetchOpts.ref.callbacks.version = 1;
+
+        debugPrint('[GitWorkerIsolate] Fetch start: remote=${cmd.remote}');
+        final rcFetch = LibGit2Bindings.I.remote_fetch(
+          remote,
+          Pointer.fromAddress(0),
+          fetchOpts,
+          Pointer.fromAddress(0),
+        );
+        if (rcFetch != 0) {
+          return GitResult<void>.failure(_formatGitError('Fetch', rcFetch, remoteHandle: remote, remoteName: cmd.remote));
+        }
+      } finally {
+        calloc.free(fetchOpts);
       }
       // Basic progress summary
       try {
@@ -1032,8 +1142,18 @@ class GitIsolateManager {
       final rcL = LibGit2Bindings.I.remote_lookup(remoteOut, repo!, remoteName);
       if (rcL != 0) return GitResult<void>.failure(_formatGitError('Lookup remote', rcL, remoteName: cmd.remote));
       final remote = remoteOut.value;
-      final rcF = LibGit2Bindings.I.remote_fetch(remote, Pointer.fromAddress(0), Pointer.fromAddress(0), Pointer.fromAddress(0));
-      if (rcF != 0) return GitResult<void>.failure(_formatGitError('Fetch', rcF, remoteHandle: remote, remoteName: cmd.remote));
+
+      final fetchOpts = calloc<git_fetch_options>();
+      try {
+        LibGit2Bindings.I.fetch_init_options(fetchOpts, 1);
+        fetchOpts.ref.callbacks.credentials = CredentialsProvider.getSharedCallbackPointer();
+        fetchOpts.ref.callbacks.version = 1;
+
+        final rcF = LibGit2Bindings.I.remote_fetch(remote, Pointer.fromAddress(0), fetchOpts, Pointer.fromAddress(0));
+        if (rcF != 0) return GitResult<void>.failure(_formatGitError('Fetch', rcF, remoteHandle: remote, remoteName: cmd.remote));
+      } finally {
+        calloc.free(fetchOpts);
+      }
 
       // Resolve OIDs
       final rcLocal = LibGit2Bindings.I.reference_name_to_id(oidLocal, repo, localRef);

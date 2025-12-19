@@ -17,8 +17,8 @@
      • git_strarray + dispose ✅
      • git_remote_fetch ✅
      • git_remote_push ✅
-     • (pending) git_remote_connect/check ⏳
-    - [ ] Callback structs for progress and credentials
+     • git_remote_connect/check ✅
+    - [x] Callback structs for progress and credentials ✅
 
 2) Credentials provider
    - [x] Dart-side provider for HTTPS (username/password, PAT) and SSH (agent, key files)

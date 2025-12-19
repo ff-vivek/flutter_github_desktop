@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:watcher/watcher.dart';
+import 'package:gitdesktop/core/git/credentials_provider.dart';
 import 'package:gitdesktop/core/git/git_isolate_manager.dart';
 import 'package:gitdesktop/core/models/commit_item.dart';
 
@@ -318,7 +319,7 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
 
     try {
       final result = await _gitManager.execute<void>(
-        PushCommand(_repoPath, remote, targetBranch),
+        PushCommand(_repoPath, remote, targetBranch, credentials: _getCredentials()),
       );
 
       if (!result.success) {
@@ -341,7 +342,7 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
 
     try {
       final result = await _gitManager.execute<void>(
-        FetchCommand(_repoPath, remote),
+        FetchCommand(_repoPath, remote, credentials: _getCredentials()),
       );
 
       if (!result.success) {
@@ -365,7 +366,7 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
     debugPrint('[RepositoryStateNotifier] Pulling from $remote/$targetBranch');
     try {
       final result = await _gitManager.execute<void>(
-        PullCommand(_repoPath, remote, targetBranch),
+        PullCommand(_repoPath, remote, targetBranch, credentials: _getCredentials()),
       );
       if (!result.success) {
         throw Exception(result.error ?? 'Pull failed');
@@ -379,6 +380,10 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       state = AsyncValue.data(base.copyWith(error: e.toString()));
       return false;
     }
+  }
+
+  Map<String, GitCredentialInfo> _getCredentials() {
+    return CredentialsRegistry.exportAll();
   }
 }
 

@@ -59,6 +59,15 @@ typedef GitStatusCbDart = int Function(Pointer<Utf8> path, int statusFlags, Poin
 typedef GitDiffLineCbNative = Int32 Function(Pointer<Void> delta, Pointer<Void> hunk, Pointer<git_diff_line> line, Pointer<Void> payload);
 typedef GitDiffLineCbDart = int Function(Pointer<Void> delta, Pointer<Void> hunk, Pointer<git_diff_line> line, Pointer<Void> payload);
 
+/// Callback for credentials: int (*git_cred_acquire_cb)(git_cred **cred, const char *url, const char *username_from_url, unsigned int allowed_types, void *payload)
+typedef GitCredAcquireCbNative = Int32 Function(Pointer<Pointer<Void>> cred, Pointer<Utf8> url, Pointer<Utf8> usernameFromUrl, Uint32 allowedTypes, Pointer<Void> payload);
+
+/// Callback for transfer progress: int (*git_transfer_progress_cb)(const git_transfer_progress *stats, void *payload)
+typedef GitTransferProgressCbNative = Int32 Function(Pointer<git_transfer_progress> stats, Pointer<Void> payload);
+
+/// Callback for sideband progress: int (*git_transport_message_cb)(const char *str, int len, void *payload)
+typedef GitSidebandProgressCbNative = Int32 Function(Pointer<Int8> str, Int32 len, Pointer<Void> payload);
+
 /// git_oid (20-byte SHA1-ish) structure
 class git_oid extends Struct {
   @Array(20)
@@ -102,6 +111,64 @@ class git_strarray extends Struct {
   external Pointer<Pointer<Int8>> strings;
   @Uint64()
   external int count;
+}
+
+/// git_remote_callbacks
+class git_remote_callbacks extends Struct {
+  @Uint32()
+  external int version;
+
+  external Pointer<NativeFunction<GitSidebandProgressCbNative>> sideband_progress;
+  external Pointer<Void> certificate_check; // git_transport_certificate_check_cb
+  external Pointer<NativeFunction<GitTransferProgressCbNative>> transfer_progress;
+  external Pointer<Void> push_update_reference; // git_push_update_reference_cb
+  external Pointer<Void> push_transfer_progress; // git_push_transfer_progress_cb
+  external Pointer<Void> push_negotiation; // git_push_negotiation_cb
+  external Pointer<Void> transport_message; // git_transport_message_cb
+  external Pointer<Void> url_resolve; // git_url_resolve_cb
+  external Pointer<NativeFunction<GitCredAcquireCbNative>> credentials;
+
+  external Pointer<Void> payload;
+}
+
+/// git_fetch_options
+class git_fetch_options extends Struct {
+  @Uint32()
+  external int version;
+
+  external git_remote_callbacks callbacks;
+
+  @Int32()
+  external int prune;
+
+  @Int32()
+  external int update_fetchhead;
+
+  @Int32()
+  external int download_tags;
+
+  // Simplified proxy_opts and custom_headers for now
+  @Array(64) // proxy_opts (approx size if we don't use it)
+  external Array<Uint8> proxy_opts;
+
+  external git_strarray custom_headers;
+}
+
+/// git_push_options
+class git_push_options extends Struct {
+  @Uint32()
+  external int version;
+
+  @Uint32()
+  external int pb_parallelism;
+
+  external git_remote_callbacks callbacks;
+
+  // proxy_opts and custom_headers
+  @Array(64)
+  external Array<Uint8> proxy_opts;
+
+  external git_strarray custom_headers;
 }
 
 /// Minimal libgit2 bindings needed for Phase 1 (open repo + status)
@@ -186,11 +253,23 @@ class LibGit2Bindings {
   late final int Function(Pointer<git_repository> repo, Pointer<Utf8> name) remote_delete;
   late final int Function(Pointer<git_repository> repo, Pointer<Utf8> name, Pointer<Utf8> url) remote_set_url;
   // Network
+  // int git_remote_connect(git_remote *remote, git_direction direction, const git_remote_callbacks *callbacks, const git_proxy_options *proxy_opts, const git_strarray *custom_headers);
+  late final int Function(Pointer<git_remote> remote, int direction, Pointer<git_remote_callbacks> callbacks, Pointer<Void> proxyOpts, Pointer<git_strarray> customHeaders) remote_connect;
+  // int git_remote_connected(const git_remote *remote);
+  late final int Function(Pointer<git_remote> remote) remote_connected;
+  // void git_remote_disconnect(git_remote *remote);
+  late final void Function(Pointer<git_remote> remote) remote_disconnect;
   // int git_remote_fetch(git_remote *remote, const git_strarray *refspecs, const git_fetch_options *opts, const char *reflog_message);
-  late final int Function(Pointer<git_remote> remote, Pointer<git_strarray> refspecs, Pointer<Void> opts, Pointer<Utf8> reflogMessage) remote_fetch;
+  late final int Function(Pointer<git_remote> remote, Pointer<git_strarray> refspecs, Pointer<git_fetch_options> opts, Pointer<Utf8> reflogMessage) remote_fetch;
   late final void Function(Pointer<git_strarray> arr) strarray_dispose;
   // int git_remote_push(git_remote *remote, const git_strarray *refspecs, const git_push_options *opts);
-  late final int Function(Pointer<git_remote> remote, Pointer<git_strarray> refspecs, Pointer<Void> opts) remote_push;
+  late final int Function(Pointer<git_remote> remote, Pointer<git_strarray> refspecs, Pointer<git_push_options> opts) remote_push;
+  // int git_fetch_init_options(git_fetch_options *opts, unsigned int version);
+  late final int Function(Pointer<git_fetch_options> opts, int version) fetch_init_options;
+  // int git_push_init_options(git_push_options *opts, unsigned int version);
+  late final int Function(Pointer<git_push_options> opts, int version) push_init_options;
+  // int git_remote_init_callbacks(git_remote_callbacks *opts, unsigned int version);
+  late final int Function(Pointer<git_remote_callbacks> opts, int version) remote_init_callbacks;
   // const git_transfer_progress * git_remote_stats(git_remote *remote)
   late final Pointer<git_transfer_progress> Function(Pointer<git_remote> remote) remote_stats;
   // Credentials helpers
@@ -381,11 +460,39 @@ class LibGit2Bindings {
     remote_set_url = _lib
         .lookup<NativeFunction<Int32 Function(Pointer<git_repository>, Pointer<Utf8>, Pointer<Utf8>)>>('git_remote_set_url')
         .asFunction();
+    remote_connect = _lib
+        .lookup<
+            NativeFunction<
+                Int32 Function(
+                  Pointer<git_remote>,
+                  Int32,
+                  Pointer<git_remote_callbacks>,
+                  Pointer<Void>,
+                  Pointer<git_strarray>,
+                )
+              >
+          >('git_remote_connect')
+        .asFunction();
+    remote_connected = _lib
+        .lookup<NativeFunction<Int32 Function(Pointer<git_remote>)>>('git_remote_connected')
+        .asFunction();
+    remote_disconnect = _lib
+        .lookup<NativeFunction<Void Function(Pointer<git_remote>)>>('git_remote_disconnect')
+        .asFunction();
     remote_fetch = _lib
-        .lookup<NativeFunction<Int32 Function(Pointer<git_remote>, Pointer<git_strarray>, Pointer<Void>, Pointer<Utf8>)>>('git_remote_fetch')
+        .lookup<NativeFunction<Int32 Function(Pointer<git_remote>, Pointer<git_strarray>, Pointer<git_fetch_options>, Pointer<Utf8>)>>('git_remote_fetch')
         .asFunction();
     remote_push = _lib
-        .lookup<NativeFunction<Int32 Function(Pointer<git_remote>, Pointer<git_strarray>, Pointer<Void>)>>('git_remote_push')
+        .lookup<NativeFunction<Int32 Function(Pointer<git_remote>, Pointer<git_strarray>, Pointer<git_push_options>)>>('git_remote_push')
+        .asFunction();
+    fetch_init_options = _lib
+        .lookup<NativeFunction<Int32 Function(Pointer<git_fetch_options>, Uint32)>>('git_fetch_options_init')
+        .asFunction();
+    push_init_options = _lib
+        .lookup<NativeFunction<Int32 Function(Pointer<git_push_options>, Uint32)>>('git_push_options_init')
+        .asFunction();
+    remote_init_callbacks = _lib
+        .lookup<NativeFunction<Int32 Function(Pointer<git_remote_callbacks>, Uint32)>>('git_remote_init_callbacks')
         .asFunction();
     remote_stats = _lib
         .lookup<NativeFunction<Pointer<git_transfer_progress> Function(Pointer<git_remote>)>>('git_remote_stats')

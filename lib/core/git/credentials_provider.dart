@@ -41,6 +41,22 @@ class GitCredentialType {
   static const int sshMemory = 1 << 6;
 }
 
+/// Information for Git authentication
+class GitCredentialInfo {
+  final String? personalAccessToken;
+  final String? username;
+  final String? sshPrivateKeyPath;
+  final String? sshPublicKeyPath;
+  final String? sshPassphrase;
+  const GitCredentialInfo({
+    this.personalAccessToken,
+    this.username,
+    this.sshPrivateKeyPath,
+    this.sshPublicKeyPath,
+    this.sshPassphrase,
+  });
+}
+
 /// Provides credentials for Git operations (push, pull, fetch)
 ///
 /// This class creates a C-compatible callback function pointer that libgit2
@@ -71,6 +87,7 @@ class CredentialsProvider {
   final String? sshPublicKeyPath;
   final String? sshPassphrase;
 
+  static NativeCallable<GitCredAcquireCallback>? _sharedNativeCallable;
   NativeCallable<GitCredAcquireCallback>? _nativeCallable;
 
   CredentialsProvider({
@@ -101,6 +118,13 @@ class CredentialsProvider {
     }
 
     return _nativeCallable!.nativeFunction;
+  }
+
+  /// Get a static C-compatible function pointer for libgit2 callback.
+  /// This can be used across the isolate as it resolves providers via CredentialsRegistry.
+  static Pointer<NativeFunction<GitCredAcquireCallback>> getSharedCallbackPointer() {
+    _sharedNativeCallable ??= _createNativeCallable();
+    return _sharedNativeCallable!.nativeFunction;
   }
 
   /// Create the native callable with proper exception handling
@@ -303,6 +327,32 @@ class CredentialsRegistry {
     final key = host.trim().toLowerCase();
     final p = _byHost[key];
     return p ?? _global;
+  }
+
+  /// Exports all current credentials for transport to background isolate.
+  static Map<String, GitCredentialInfo> exportAll() {
+    final results = <String, GitCredentialInfo>{};
+    _byHost.forEach((host, p) {
+      results[host] = GitCredentialInfo(
+        personalAccessToken: p.personalAccessToken,
+        username: p.username,
+        sshPrivateKeyPath: p.sshPrivateKeyPath,
+        sshPublicKeyPath: p.sshPublicKeyPath,
+        sshPassphrase: p.sshPassphrase,
+      );
+    });
+    // Add global as a special key if present
+    if (_global != null) {
+      final g = _global!;
+      results['*'] = GitCredentialInfo(
+        personalAccessToken: g.personalAccessToken,
+        username: g.username,
+        sshPrivateKeyPath: g.sshPrivateKeyPath,
+        sshPublicKeyPath: g.sshPublicKeyPath,
+        sshPassphrase: g.sshPassphrase,
+      );
+    }
+    return results;
   }
 }
 
