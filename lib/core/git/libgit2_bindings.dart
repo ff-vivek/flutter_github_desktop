@@ -4,15 +4,15 @@ import 'package:flutter/foundation.dart';
 import 'package:gitdesktop/core/git/dynamic_library_service.dart';
 
 /// Opaque C structs
-class git_repository extends Opaque {}
-class git_status_list extends Opaque {}
- class git_commit extends Opaque {}
-class git_tree extends Opaque {}
-class git_tree_entry extends Opaque {}
-class git_blob extends Opaque {}
-class git_object extends Opaque {}
-  class git_index extends Opaque {}
-  class git_signature extends Struct {
+final class git_repository extends Opaque {}
+final class git_status_list extends Opaque {}
+final class git_commit extends Opaque {}
+final class git_tree extends Opaque {}
+final class git_tree_entry extends Opaque {}
+final class git_blob extends Opaque {}
+final class git_object extends Opaque {}
+final class git_index extends Opaque {}
+final class git_signature extends Struct {
     external Pointer<Int8> name;
     external Pointer<Int8> email;
     @Int64()
@@ -20,10 +20,10 @@ class git_object extends Opaque {}
     @Int32()
     external int when_offset;
   }
-  class git_revwalk extends Opaque {}
-  class git_remote extends Opaque {}
-  class git_reference extends Opaque {}
-  class git_transfer_progress extends Struct {
+  final class git_revwalk extends Opaque {}
+  final class git_remote extends Opaque {}
+  final class git_reference extends Opaque {}
+  final class git_transfer_progress extends Struct {
     @Uint32()
     external int total_objects;
     @Uint32()
@@ -45,7 +45,7 @@ class git_object extends Opaque {}
   ///   int klass;
   ///   const char *message;
   /// } git_error;
-  class git_error extends Struct {
+  final class git_error extends Struct {
     @Int32()
     external int klass;
     external Pointer<Int8> message;
@@ -69,7 +69,7 @@ typedef GitTransferProgressCbNative = Int32 Function(Pointer<git_transfer_progre
 typedef GitSidebandProgressCbNative = Int32 Function(Pointer<Int8> str, Int32 len, Pointer<Void> payload);
 
 /// git_oid (20-byte SHA1-ish) structure
-class git_oid extends Struct {
+final class git_oid extends Struct {
   @Array(20)
   external Array<Uint8> id;
 }
@@ -84,7 +84,7 @@ class git_oid extends Struct {
 ///   const char *content;
 ///   git_off_t content_offset;
 /// } git_diff_line;
-class git_diff_line extends Struct {
+final class git_diff_line extends Struct {
   @Int8()
   external int origin;
 
@@ -107,14 +107,14 @@ class git_diff_line extends Struct {
 }
 
 /// git_strarray { char **strings; size_t count; }
-class git_strarray extends Struct {
+final class git_strarray extends Struct {
   external Pointer<Pointer<Int8>> strings;
   @Uint64()
   external int count;
 }
 
 /// git_remote_callbacks
-class git_remote_callbacks extends Struct {
+final class git_remote_callbacks extends Struct {
   @Uint32()
   external int version;
 
@@ -132,7 +132,7 @@ class git_remote_callbacks extends Struct {
 }
 
 /// git_fetch_options
-class git_fetch_options extends Struct {
+final class git_fetch_options extends Struct {
   @Uint32()
   external int version;
 
@@ -155,7 +155,7 @@ class git_fetch_options extends Struct {
 }
 
 /// git_push_options
-class git_push_options extends Struct {
+final class git_push_options extends Struct {
   @Uint32()
   external int version;
 
