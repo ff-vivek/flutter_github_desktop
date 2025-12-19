@@ -81,13 +81,14 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
 
   @override
   Future<RepositoryState> build() async {
-    // This will be overridden by the family provider
+    // Initial empty state; caller must call initialize(repoPath)
     _repoPath = '';
     return RepositoryState(path: _repoPath);
   }
 
   /// Initialize with a specific repository path
   void initialize(String repoPath) {
+    // Kept for compatibility if called manually; provider build handles normal init
     _repoPath = repoPath;
     _loadRepositoryState();
     _startWatcher();
@@ -298,10 +299,5 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
   }
 }
 
-/// Simple provider that creates a repository state for a given path
-/// This is a simplified version for demonstration purposes
-final repositoryStateProvider = Provider.family<RepositoryState, String>(
-  (ref, repoPath) {
-    return RepositoryState(path: repoPath);
-  },
-);
+/// Repository state provider (singleton; call initialize(repoPath) to use)
+final repositoryStateNotifierProvider = AsyncNotifierProvider<RepositoryStateNotifier, RepositoryState>(RepositoryStateNotifier.new);

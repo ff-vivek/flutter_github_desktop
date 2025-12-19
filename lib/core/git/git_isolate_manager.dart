@@ -56,6 +56,19 @@ class GetHistoryCommand extends GitCommand {
   const GetHistoryCommand(this.repoPath, this.limit);
 }
 
+/// Command to clone a repository
+class CloneRepoCommand extends GitCommand {
+  final String url;
+  final String destinationPath;
+  const CloneRepoCommand(this.url, this.destinationPath);
+}
+
+/// Command to initialize a new repository
+class InitRepoCommand extends GitCommand {
+  final String path;
+  const InitRepoCommand(this.path);
+}
+
 /// Command to shutdown the isolate
 class ShutdownCommand extends GitCommand {
   const ShutdownCommand();
@@ -292,6 +305,10 @@ class GitIsolateManager {
       return _handleGetDiff(command);
     } else if (command is GetHistoryCommand) {
       return _handleGetHistory(command);
+    } else if (command is CloneRepoCommand) {
+      return _handleClone(command);
+    } else if (command is InitRepoCommand) {
+      return _handleInit(command);
     } else if (command is ShutdownCommand) {
       debugPrint('[GitWorkerIsolate] Shutdown requested');
       return const GitResult<void>.success(null);
@@ -375,5 +392,26 @@ class GitIsolateManager {
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       },
     ]);
+  }
+
+  static GitResult<Map<String, dynamic>> _handleClone(CloneRepoCommand cmd) {
+    // TODO: Call git_clone() via FFI with progress + credentials callbacks
+    debugPrint('[GitWorkerIsolate] Cloning ${cmd.url} -> ${cmd.destinationPath}');
+    // Simulate success
+    return GitResult<Map<String, dynamic>>.success({
+      'url': cmd.url,
+      'path': cmd.destinationPath,
+      'branch': 'main',
+    });
+  }
+
+  static GitResult<Map<String, dynamic>> _handleInit(InitRepoCommand cmd) {
+    // TODO: Call git_repository_init() via FFI
+    debugPrint('[GitWorkerIsolate] Initializing new repo at ${cmd.path}');
+    return GitResult<Map<String, dynamic>>.success({
+      'path': cmd.path,
+      'branch': 'main',
+      'empty': true,
+    });
   }
 }
