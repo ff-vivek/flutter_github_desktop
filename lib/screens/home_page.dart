@@ -4,6 +4,10 @@ import 'package:gitdesktop/theme.dart';
 import 'package:gitdesktop/core/providers/repository_state_notifier.dart';
 import 'package:gitdesktop/core/services/recent_repos_service.dart';
 import 'package:gitdesktop/core/git/git_isolate_manager.dart';
+import 'package:gitdesktop/core/git/credentials_provider.dart';
+import 'package:gitdesktop/core/models/diff_hunk.dart';
+import 'package:gitdesktop/core/models/diff_line.dart';
+import 'package:gitdesktop/core/models/commit_item.dart';
 import 'package:go_router/go_router.dart';
 
 /// Home page showing repository list
@@ -332,8 +336,16 @@ class _HomePageState extends ConsumerState<HomePage> {
       data: (repo) {
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _RepoHeader(repo: repo, onRefresh: () => ref.read(repositoryStateNotifierProvider.notifier).refresh()),
+          const SizedBox(height: AppSpacing.md),
+          RepoActionsToolbar(repoPath: repo.path, currentBranch: repo.currentBranch ?? 'main'),
           const SizedBox(height: AppSpacing.lg),
-          Expanded(child: _RepoChanges()),
+          SizedBox(height: 160, child: RemotesPanelCard(repoPath: repo.path)),
+          const SizedBox(height: AppSpacing.lg),
+          CommitComposer(),
+          const SizedBox(height: AppSpacing.lg),
+          Flexible(child: _RepoChanges()),
+          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: 260, child: _HistoryCard(commits: repo.commits)),
         ]);
       },
     );
@@ -479,12 +491,51 @@ class _RepoChanges extends ConsumerWidget {
       loading: () => const SizedBox.shrink(),
       error: (_, __) => const SizedBox.shrink(),
       data: (repo) {
+        void _openDiff(String filePath) {
+          showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            builder: (_) => SizedBox(
+              height: MediaQuery.of(context).size.height * 0.75,
+              child: DiffViewerModal(repoPath: repo.path, filePath: filePath),
+            ),
+          );
+        }
+
         return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: _FileListCard(title: 'Modified', icon: Icons.change_circle, files: repo.modifiedFiles, onTap: null)),
+          Expanded(
+            child: _FileListCard(
+              title: 'Modified',
+              icon: Icons.change_circle,
+              files: repo.modifiedFiles,
+              onTap: (f) => ref.read(repositoryStateNotifierProvider.notifier).stageFiles([f]),
+              onLongPress: _openDiff,
+              trailingIcon: Icons.add_task,
+            ),
+          ),
           const SizedBox(width: AppSpacing.lg),
-          Expanded(child: _FileListCard(title: 'Staged', icon: Icons.task_alt, files: repo.stagedFiles, onTap: null)),
+          Expanded(
+            child: _FileListCard(
+              title: 'Staged',
+              icon: Icons.task_alt,
+              files: repo.stagedFiles,
+              onTap: (f) => ref.read(repositoryStateNotifierProvider.notifier).unstageFiles([f]),
+              onLongPress: _openDiff,
+              trailingIcon: Icons.undo,
+            ),
+          ),
           const SizedBox(width: AppSpacing.lg),
-          Expanded(child: _FileListCard(title: 'Untracked', icon: Icons.new_releases, files: repo.untrackedFiles, onTap: null)),
+          Expanded(
+            child: _FileListCard(
+              title: 'Untracked',
+              icon: Icons.new_releases,
+              files: repo.untrackedFiles,
+              onTap: (f) => ref.read(repositoryStateNotifierProvider.notifier).stageFiles([f]),
+              onLongPress: _openDiff,
+              trailingIcon: Icons.add_task,
+            ),
+          ),
         ]);
       },
     );
@@ -492,8 +543,8 @@ class _RepoChanges extends ConsumerWidget {
 }
 
 class _FileListCard extends StatelessWidget {
-  final String title; final IconData icon; final List<String> files; final void Function(String file)? onTap;
-  const _FileListCard({required this.title, required this.icon, required this.files, this.onTap});
+  final String title; final IconData icon; final List<String> files; final void Function(String file)? onTap; final void Function(String file)? onLongPress; final IconData? trailingIcon;
+  const _FileListCard({required this.title, required this.icon, required this.files, this.onTap, this.onLongPress, this.trailingIcon});
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -533,7 +584,9 @@ class _FileListCard extends StatelessWidget {
                   dense: true,
                   leading: Icon(Icons.insert_drive_file, color: scheme.onSurfaceVariant),
                   title: Text(f, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodyMedium),
+                  trailing: trailingIcon == null ? null : Icon(trailingIcon, color: scheme.primary),
                   onTap: onTap == null ? null : () => onTap!(f),
+                  onLongPress: onLongPress == null ? null : () => onLongPress!(f),
                 );
               },
             ),
@@ -541,6 +594,74 @@ class _FileListCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+class _HistoryCard extends StatelessWidget {
+  final List<CommitItem> commits;
+  const _HistoryCard({required this.commits});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.15)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.history_toggle_off, color: scheme.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Text('Recent commits', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+          const Spacer(),
+          Text('${commits.length}', style: Theme.of(context).textTheme.labelMedium?.withColor(scheme.onSurfaceVariant)),
+        ]),
+        const SizedBox(height: AppSpacing.md),
+        Expanded(
+          child: commits.isEmpty
+              ? Center(child: Text('No commits yet', style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.onSurfaceVariant)))
+              : ListView.separated(
+                  itemCount: commits.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: scheme.outline.withValues(alpha: 0.08)),
+                  itemBuilder: (context, index) {
+                    final c = commits[index];
+                    final date = _formatTime(c.time);
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(Icons.commit, color: scheme.onSurfaceVariant),
+                      title: Text(_firstLine(c.message), overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${c.author} • $date', overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.onSurfaceVariant)),
+                      trailing: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(6)),
+                        child: Text(c.hash.substring(0, c.hash.length >= 7 ? 7 : c.hash.length), style: Theme.of(context).textTheme.labelSmall),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ]),
+    );
+  }
+
+  String _firstLine(String s) {
+    final i = s.indexOf('\n');
+    return i == -1 ? s : s.substring(0, i);
+  }
+
+  String _formatTime(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${time.year}-${_two(time.month)}-${_two(time.day)}';
+  }
+
+  String _two(int n) => n < 10 ? '0$n' : '$n';
 }
 
 class _Chip extends StatelessWidget {
@@ -703,6 +824,79 @@ class AddExistingRepoSheet extends StatefulWidget {
   State<AddExistingRepoSheet> createState() => _AddExistingRepoSheetState();
 }
 
+// =============================
+// Commit composer
+// =============================
+
+class CommitComposer extends ConsumerStatefulWidget {
+  CommitComposer({super.key});
+
+  @override
+  ConsumerState<CommitComposer> createState() => _CommitComposerState();
+}
+
+class _CommitComposerState extends ConsumerState<CommitComposer> {
+  final _controller = TextEditingController();
+  bool _loading = false; String? _error;
+
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+
+  Future<void> _commit() async {
+    final msg = _controller.text.trim();
+    if (msg.isEmpty) return setState(() => _error = 'Enter a commit message');
+    setState(() { _loading = true; _error = null; });
+    final ok = await ref.read(repositoryStateNotifierProvider.notifier).commit(msg);
+    if (!mounted) return;
+    if (ok) {
+      _controller.clear();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: const Text('Commit created'), backgroundColor: Theme.of(context).colorScheme.primary));
+      setState(() { _loading = false; });
+    } else {
+      setState(() { _loading = false; _error = 'Commit failed'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.2)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.edit_note, color: scheme.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Text('Commit message', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+        ]),
+        const SizedBox(height: AppSpacing.sm),
+        TextField(
+          controller: _controller,
+          maxLines: 3,
+          decoration: InputDecoration(
+            hintText: 'Describe your changes',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
+          ),
+        ),
+        if (_error != null) Padding(padding: const EdgeInsets.only(top: AppSpacing.sm), child: Text(_error!, style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.error))),
+        const SizedBox(height: AppSpacing.md),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton.icon(
+            onPressed: _loading ? null : _commit,
+            icon: Icon(Icons.check, color: scheme.onPrimary),
+            label: Text(_loading ? 'Committing...' : 'Commit'),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
 class _AddExistingRepoSheetState extends State<AddExistingRepoSheet> {
   final _path = TextEditingController();
   bool _loading = false; String? _error;
@@ -749,6 +943,598 @@ class _AddExistingRepoSheetState extends State<AddExistingRepoSheet> {
           alignment: Alignment.centerRight,
           child: FilledButton.icon(onPressed: _loading ? null : _submit, icon: Icon(Icons.check, color: scheme.onPrimary), label: _loading ? const Text('Adding...') : const Text('Add')),
         ),
+        SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+      ]),
+    );
+  }
+}
+
+// =============================
+// Diff Viewer Modal
+// =============================
+
+class DiffViewerModal extends StatefulWidget {
+  final String repoPath;
+  final String filePath;
+  const DiffViewerModal({super.key, required this.repoPath, required this.filePath});
+
+  @override
+  State<DiffViewerModal> createState() => _DiffViewerModalState();
+}
+
+class _DiffViewerModalState extends State<DiffViewerModal> {
+  late Future<_DiffData> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<_DiffData> _load() async {
+    try {
+      final res = await GitIsolateManager().execute<List<Map<String, dynamic>>>(
+        GetDiffCommand(widget.repoPath, widget.filePath),
+      );
+      if (!res.success) throw Exception(res.error ?? 'Failed to load diff');
+      final hunksJson = res.data ?? const <Map<String, dynamic>>[];
+      final hunks = hunksJson.map((e) => DiffHunk.fromJson(e)).toList();
+      return _DiffData(hunks: hunks);
+    } catch (e) {
+      debugPrint('[DiffViewerModal] Failed to load diff: $e');
+      return _DiffData(error: e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        padding: AppSpacing.paddingLg,
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          border: Border(bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.12))),
+        ),
+        child: Row(children: [
+          Icon(Icons.compare, color: scheme.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(child: Text(widget.filePath, style: Theme.of(context).textTheme.titleMedium?.semiBold)),
+          IconButton(onPressed: () => context.pop(), icon: Icon(Icons.close, color: scheme.onSurfaceVariant)),
+        ]),
+      ),
+      Expanded(
+        child: FutureBuilder<_DiffData>(
+          future: _future,
+          builder: (context, snap) {
+            if (!snap.hasData) {
+              return Center(child: CircularProgressIndicator(color: scheme.primary));
+            }
+            final data = snap.data!;
+            if (data.error != null) {
+              return Center(
+                child: Padding(
+                  padding: AppSpacing.paddingLg,
+                  child: Text(data.error!, style: Theme.of(context).textTheme.bodyMedium?.withColor(scheme.error)),
+                ),
+              );
+            }
+            final hunks = data.hunks;
+            if (hunks.isEmpty) {
+              return Center(child: Text('No changes', style: Theme.of(context).textTheme.bodyMedium));
+            }
+            return ListView.builder(
+              padding: AppSpacing.paddingLg,
+              itemCount: hunks.length,
+              itemBuilder: (context, i) => _HunkView(hunks[i]),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+}
+
+class _DiffData {
+  final List<DiffHunk> hunks; final String? error;
+  _DiffData({this.hunks = const [], this.error});
+}
+
+class _HunkView extends StatelessWidget {
+  final DiffHunk h;
+  const _HunkView(this.h);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.08)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(AppRadius.md), topRight: Radius.circular(AppRadius.md)),
+          ),
+          child: Text(h.header, style: Theme.of(context).textTheme.labelMedium?.withColor(scheme.onSurfaceVariant)),
+        ),
+        ...h.lines.map((l) => _LineView(l)).toList(),
+      ]),
+    );
+  }
+}
+
+class _LineView extends StatelessWidget {
+  final DiffLine l;
+  const _LineView(this.l);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Color bg;
+    Color fg;
+    IconData icon;
+    switch (l.type) {
+      case DiffLineType.added:
+        bg = scheme.tertiaryContainer;
+        fg = scheme.onTertiaryContainer;
+        icon = Icons.add;
+        break;
+      case DiffLineType.deleted:
+        bg = scheme.errorContainer;
+        fg = scheme.onErrorContainer;
+        icon = Icons.remove;
+        break;
+      case DiffLineType.context:
+      case DiffLineType.header:
+        bg = scheme.surface;
+        fg = scheme.onSurfaceVariant;
+        icon = Icons.drag_indicator;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.05)))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 56,
+          child: Text(
+            '${l.oldLineNumber <= 0 ? '' : l.oldLineNumber} ${l.newLineNumber <= 0 ? '' : l.newLineNumber}'.trim(),
+            style: Theme.of(context).textTheme.labelSmall?.withColor(scheme.onSurfaceVariant),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          margin: const EdgeInsets.only(right: 8),
+          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+          child: Icon(icon, size: 14, color: fg),
+        ),
+        Expanded(child: Text(l.content, softWrap: true, overflow: TextOverflow.visible, style: Theme.of(context).textTheme.bodySmall)),
+      ]),
+    );
+  }
+}
+
+
+// =============================
+// Repo Actions (Fetch / Pull / Push)
+// =============================
+
+class RepoActionsToolbar extends ConsumerStatefulWidget {
+  final String repoPath; final String currentBranch;
+  const RepoActionsToolbar({super.key, required this.repoPath, required this.currentBranch});
+
+  @override
+  ConsumerState<RepoActionsToolbar> createState() => _RepoActionsToolbarState();
+}
+
+class _RepoActionsToolbarState extends ConsumerState<RepoActionsToolbar> {
+  bool _busy = false;
+
+  Future<void> _run(String label, Future<bool> Function() task) async {
+    if (_busy) return; setState(() => _busy = true);
+    final scheme = Theme.of(context).colorScheme;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(SnackBar(content: Text('$label started…'), backgroundColor: scheme.surfaceContainerHighest));
+    try {
+      final ok = await task();
+      messenger.showSnackBar(SnackBar(content: Text(ok ? '$label completed' : '$label failed'), backgroundColor: ok ? scheme.primary : scheme.error));
+    } catch (e) {
+      debugPrint('[RepoActionsBar] $label error: $e');
+      messenger.showSnackBar(SnackBar(content: Text('$label error: $e'), backgroundColor: scheme.error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.15)),
+      ),
+      child: Row(children: [
+        Icon(Icons.sync, color: scheme.primary),
+        const SizedBox(width: AppSpacing.sm),
+        Text('Remote actions', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+        const Spacer(),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : () => _run('Fetch', () => ref.read(repositoryStateNotifierProvider.notifier).fetch()),
+          icon: Icon(Icons.download, color: scheme.primary),
+          label: const Text('Fetch'),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : () => _run('Pull', () => ref.read(repositoryStateNotifierProvider.notifier).pull()),
+          icon: Icon(Icons.download_done, color: scheme.primary),
+          label: const Text('Pull'),
+        ),
+        const SizedBox(width: 8),
+        FilledButton.icon(
+          onPressed: _busy ? null : () => _run('Push', () => ref.read(repositoryStateNotifierProvider.notifier).push(branch: widget.currentBranch)),
+          icon: Icon(Icons.upload, color: scheme.onPrimary),
+          label: const Text('Push'),
+        ),
+      ]),
+    );
+  }
+}
+
+// =============================
+// Remotes Panel
+// =============================
+
+class RemotesPanelCard extends StatefulWidget {
+  final String repoPath;
+  const RemotesPanelCard({super.key, required this.repoPath});
+
+  @override
+  State<RemotesPanelCard> createState() => _RemotesPanelCardState();
+}
+
+class _RemotesPanelCardState extends State<RemotesPanelCard> {
+  late Future<List<Map<String, String>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<Map<String, String>>> _load() async {
+    try {
+      final res = await GitIsolateManager().execute<List<Map<String, String>>>(GetRemotesCommand(widget.repoPath));
+      if (!res.success) throw Exception(res.error ?? 'Failed to list remotes');
+      return res.data ?? const <Map<String, String>>[];
+    } catch (e) {
+      debugPrint('[RemotesPanel] Load error: $e');
+      return Future.error(e);
+    }
+  }
+
+  Future<void> _refresh() async => setState(() => _future = _load());
+
+  void _openAdd() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: AddRemoteSheet(repoPath: widget.repoPath, onDone: () { context.pop(); _refresh(); }),
+      ),
+    );
+  }
+
+  void _openEdit(String name, String currentUrl) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: EditRemoteUrlSheet(repoPath: widget.repoPath, name: name, currentUrl: currentUrl, onDone: () { context.pop(); _refresh(); }),
+      ),
+    );
+  }
+
+  Future<void> _remove(String name) async {
+    try {
+      final res = await GitIsolateManager().execute<void>(RemoveRemoteCommand(widget.repoPath, name));
+      if (!res.success) throw Exception(res.error ?? 'Remove failed');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Removed "$name"')));
+        _refresh();
+      }
+    } catch (e) {
+      debugPrint('[RemotesPanel] Remove error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Remove failed: $e'), backgroundColor: Theme.of(context).colorScheme.error));
+    }
+  }
+
+  void _openCredentials() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: const CredentialsPromptSheet(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.15)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.account_tree, color: scheme.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Text('Remotes', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+          const Spacer(),
+          OutlinedButton.icon(onPressed: _openCredentials, icon: Icon(Icons.vpn_key, color: scheme.primary), label: const Text('Credentials')),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(onPressed: _refresh, icon: Icon(Icons.refresh, color: scheme.primary), label: const Text('Refresh')),
+          const SizedBox(width: 8),
+          FilledButton.icon(onPressed: _openAdd, icon: Icon(Icons.add, color: scheme.onPrimary), label: const Text('Add remote')),
+        ]),
+        const SizedBox(height: AppSpacing.md),
+        Expanded(
+          child: FutureBuilder<List<Map<String, String>>>(
+            future: _future,
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(child: LinearProgressIndicator());
+              }
+              if (snap.hasError) {
+                return Center(child: Text('Failed to load remotes', style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.error)));
+              }
+              final remotes = snap.data ?? const <Map<String, String>>[];
+              if (remotes.isEmpty) {
+                return Center(child: Text('No remotes configured', style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.onSurfaceVariant)));
+              }
+              return ListView.separated(
+                itemCount: remotes.length,
+                separatorBuilder: (_, __) => Divider(height: 1, color: scheme.outline.withValues(alpha: 0.08)),
+                itemBuilder: (context, i) {
+                  final r = remotes[i];
+                  final name = r['name'] ?? '';
+                  final url = r['url'] ?? '';
+                  final isPrimary = name == 'origin';
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(isPrimary ? Icons.star : Icons.link, color: isPrimary ? Colors.amber : scheme.onSurfaceVariant),
+                    title: Row(children: [
+                      Expanded(child: Text(name, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodyMedium?.semiBold)),
+                      if (isPrimary)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(999)),
+                          child: Text('primary', style: Theme.of(context).textTheme.labelSmall?.withColor(scheme.onPrimaryContainer)),
+                        ),
+                    ]),
+                    subtitle: Text(url.isEmpty ? '—' : url, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.onSurfaceVariant)),
+                    trailing: PopupMenuButton<String>(
+                      icon: Icon(Icons.more_horiz, color: scheme.onSurfaceVariant),
+                      onSelected: (v) {
+                        switch (v) {
+                          case 'edit':
+                            _openEdit(name, url);
+                            break;
+                          case 'remove':
+                            _remove(name);
+                            break;
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'edit', child: Text('Set URL')),
+                        const PopupMenuItem(value: 'remove', child: Text('Remove')),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// =============================
+// Add/Edit Remote Sheets
+// =============================
+
+class AddRemoteSheet extends StatefulWidget {
+  final String repoPath; final VoidCallback onDone;
+  const AddRemoteSheet({super.key, required this.repoPath, required this.onDone});
+
+  @override
+  State<AddRemoteSheet> createState() => _AddRemoteSheetState();
+}
+
+class _AddRemoteSheetState extends State<AddRemoteSheet> {
+  final _name = TextEditingController(text: 'origin');
+  final _url = TextEditingController();
+  bool _loading = false; String? _error;
+
+  @override
+  void dispose() { _name.dispose(); _url.dispose(); super.dispose(); }
+
+  Future<void> _submit() async {
+    final name = _name.text.trim();
+    final url = _url.text.trim();
+    if (name.isEmpty || url.isEmpty) return setState(() => _error = 'Enter name and URL');
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await GitIsolateManager().execute<void>(AddRemoteCommand(widget.repoPath, name, url));
+      if (!res.success) throw Exception(res.error ?? 'Add failed');
+      widget.onDone();
+    } catch (e) {
+      debugPrint('[AddRemoteSheet] Add error: $e');
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Icon(Icons.add_link, color: scheme.primary), const SizedBox(width: AppSpacing.sm), Text('Add remote', style: Theme.of(context).textTheme.titleLarge?.semiBold)]),
+        const SizedBox(height: AppSpacing.md),
+        TextField(controller: _name, decoration: InputDecoration(prefixIcon: Icon(Icons.sell, color: scheme.onSurfaceVariant), hintText: 'origin')), 
+        const SizedBox(height: AppSpacing.md),
+        TextField(controller: _url, decoration: InputDecoration(prefixIcon: Icon(Icons.link, color: scheme.onSurfaceVariant), hintText: 'https://example.com/owner/repo.git')),
+        if (_error != null) Padding(padding: const EdgeInsets.only(top: AppSpacing.sm), child: Text(_error!, style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.error))),
+        const SizedBox(height: AppSpacing.md),
+        Align(alignment: Alignment.centerRight, child: FilledButton.icon(onPressed: _loading ? null : _submit, icon: Icon(Icons.check, color: scheme.onPrimary), label: Text(_loading ? 'Adding…' : 'Add'))),
+        SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+      ]),
+    );
+  }
+}
+
+class EditRemoteUrlSheet extends StatefulWidget {
+  final String repoPath; final String name; final String currentUrl; final VoidCallback onDone;
+  const EditRemoteUrlSheet({super.key, required this.repoPath, required this.name, required this.currentUrl, required this.onDone});
+
+  @override
+  State<EditRemoteUrlSheet> createState() => _EditRemoteUrlSheetState();
+}
+
+class _EditRemoteUrlSheetState extends State<EditRemoteUrlSheet> {
+  late final TextEditingController _url = TextEditingController(text: widget.currentUrl);
+  bool _loading = false; String? _error;
+
+  @override
+  void dispose() { _url.dispose(); super.dispose(); }
+
+  Future<void> _submit() async {
+    final url = _url.text.trim();
+    if (url.isEmpty) return setState(() => _error = 'Enter remote URL');
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await GitIsolateManager().execute<void>(SetRemoteUrlCommand(widget.repoPath, widget.name, url));
+      if (!res.success) throw Exception(res.error ?? 'Update failed');
+      widget.onDone();
+    } catch (e) {
+      debugPrint('[EditRemoteUrlSheet] Update error: $e');
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Icon(Icons.edit, color: scheme.primary), const SizedBox(width: AppSpacing.sm), Expanded(child: Text('Set URL for ${widget.name}', style: Theme.of(context).textTheme.titleLarge?.semiBold, overflow: TextOverflow.ellipsis))]),
+        const SizedBox(height: AppSpacing.md),
+        TextField(controller: _url, decoration: InputDecoration(prefixIcon: Icon(Icons.link, color: scheme.onSurfaceVariant), hintText: 'https://…')),
+        if (_error != null) Padding(padding: const EdgeInsets.only(top: AppSpacing.sm), child: Text(_error!, style: Theme.of(context).textTheme.bodySmall?.withColor(scheme.error))),
+        const SizedBox(height: AppSpacing.md),
+        Align(alignment: Alignment.centerRight, child: FilledButton.icon(onPressed: _loading ? null : _submit, icon: Icon(Icons.check, color: scheme.onPrimary), label: Text(_loading ? 'Saving…' : 'Save'))),
+        SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+      ]),
+    );
+  }
+}
+
+// =============================
+// Credentials Prompt (UI only)
+// =============================
+
+class CredentialsPromptSheet extends StatefulWidget {
+  const CredentialsPromptSheet({super.key});
+
+  @override
+  State<CredentialsPromptSheet> createState() => _CredentialsPromptSheetState();
+}
+
+class _CredentialsPromptSheetState extends State<CredentialsPromptSheet> {
+  String _mode = 'https';
+  final _username = TextEditingController();
+  final _token = TextEditingController();
+  final _sshKeyPath = TextEditingController();
+  final _sshPassphrase = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() { _username.dispose(); _token.dispose(); _sshKeyPath.dispose(); _sshPassphrase.dispose(); super.dispose(); }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      if (_mode == 'https') {
+        final provider = await CredentialsFactory.createWithPAT(_token.text.trim(), username: _username.text.trim());
+        CredentialsRegistry.registerGlobal(provider);
+        debugPrint('[Credentials] HTTPS saved (session): user=${_username.text} token=${_token.text.isEmpty ? '(empty)' : '***'}');
+      } else {
+        final provider = await CredentialsFactory.createWithSSH(
+          privateKeyPath: _sshKeyPath.text.trim(),
+          passphrase: _sshPassphrase.text.trim().isEmpty ? null : _sshPassphrase.text.trim(),
+        );
+        CredentialsRegistry.registerGlobal(provider);
+        debugPrint('[Credentials] SSH saved (session): key=${_sshKeyPath.text} passphrase=${_sshPassphrase.text.isEmpty ? '(empty)' : '***'}');
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Credentials saved for session (UI only)'), backgroundColor: Theme.of(context).colorScheme.primary));
+      context.pop();
+    } catch (e) {
+      debugPrint('[CredentialsPromptSheet] Save error: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Icon(Icons.vpn_key, color: scheme.primary), const SizedBox(width: AppSpacing.sm), Text('Credentials', style: Theme.of(context).textTheme.titleLarge?.semiBold)]),
+        const SizedBox(height: AppSpacing.md),
+        Wrap(spacing: 8, children: [
+          ChoiceChip(label: const Text('HTTPS / PAT'), selected: _mode == 'https', onSelected: (_) => setState(() => _mode = 'https')),
+          ChoiceChip(label: const Text('SSH'), selected: _mode == 'ssh', onSelected: (_) => setState(() => _mode = 'ssh')),
+        ]),
+        const SizedBox(height: AppSpacing.md),
+        if (_mode == 'https') ...[
+          TextField(controller: _username, decoration: InputDecoration(prefixIcon: Icon(Icons.person, color: scheme.onSurfaceVariant), hintText: 'Username or email')),
+          const SizedBox(height: AppSpacing.md),
+          TextField(controller: _token, obscureText: true, decoration: InputDecoration(prefixIcon: Icon(Icons.password, color: scheme.onSurfaceVariant), hintText: 'Password or Personal Access Token')),
+        ] else ...[
+          TextField(controller: _sshKeyPath, decoration: InputDecoration(prefixIcon: Icon(Icons.key, color: scheme.onSurfaceVariant), hintText: '~/.ssh/id_ed25519')),
+          const SizedBox(height: AppSpacing.md),
+          TextField(controller: _sshPassphrase, obscureText: true, decoration: InputDecoration(prefixIcon: Icon(Icons.lock, color: scheme.onSurfaceVariant), hintText: 'Passphrase (if any)')),
+        ],
+        const SizedBox(height: AppSpacing.md),
+        Align(alignment: Alignment.centerRight, child: FilledButton.icon(onPressed: _saving ? null : _save, icon: Icon(Icons.check, color: scheme.onPrimary), label: Text(_saving ? 'Saving…' : 'Save'))),
         SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
       ]),
     );

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:watcher/watcher.dart';
 import 'package:gitdesktop/core/git/git_isolate_manager.dart';
+import 'package:gitdesktop/core/models/commit_item.dart';
 
 /// State of a Git repository
 class RepositoryState {
@@ -11,6 +12,7 @@ class RepositoryState {
   final List<String> modifiedFiles;
   final List<String> stagedFiles;
   final List<String> untrackedFiles;
+  final List<CommitItem> commits;
   final bool isLoading;
   final String? error;
 
@@ -20,6 +22,7 @@ class RepositoryState {
     this.modifiedFiles = const [],
     this.stagedFiles = const [],
     this.untrackedFiles = const [],
+    this.commits = const [],
     this.isLoading = false,
     this.error,
   });
@@ -30,6 +33,7 @@ class RepositoryState {
     List<String>? modifiedFiles,
     List<String>? stagedFiles,
     List<String>? untrackedFiles,
+    List<CommitItem>? commits,
     bool? isLoading,
     String? error,
   }) {
@@ -39,6 +43,7 @@ class RepositoryState {
       modifiedFiles: modifiedFiles ?? this.modifiedFiles,
       stagedFiles: stagedFiles ?? this.stagedFiles,
       untrackedFiles: untrackedFiles ?? this.untrackedFiles,
+      commits: commits ?? this.commits,
       isLoading: isLoading ?? this.isLoading,
       error: error,
     );
@@ -129,12 +134,21 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
 
       final statusData = statusResult.data!;
 
+      // Get history
+      final historyResult = await _gitManager.execute<List<Map<String, dynamic>>>(
+        GetHistoryCommand(_repoPath, 50),
+      );
+      final history = historyResult.success
+          ? (historyResult.data ?? const <Map<String, dynamic>>[]).map((e) => CommitItem.fromJson(e)).toList()
+          : <CommitItem>[];
+
       state = AsyncValue.data(RepositoryState(
         path: _repoPath,
         currentBranch: repoData['branch'] as String?,
         modifiedFiles: List<String>.from(statusData['modifiedFiles'] ?? []),
         stagedFiles: List<String>.from(statusData['stagedFiles'] ?? []),
         untrackedFiles: List<String>.from(statusData['untrackedFiles'] ?? []),
+        commits: history,
         isLoading: false,
       ));
 
@@ -235,15 +249,40 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
   /// Stage files
   Future<void> stageFiles(List<String> files) async {
     debugPrint('[RepositoryStateNotifier] Staging ${files.length} files');
-    // TODO: Implement staging via GitIsolateManager
-    await _refreshStatus();
+    final base = state.value ?? RepositoryState(path: _repoPath);
+    final newStaged = [...base.stagedFiles];
+    final newModified = [...base.modifiedFiles];
+    final newUntracked = [...base.untrackedFiles];
+    for (final f in files) {
+      if (!newStaged.contains(f)) newStaged.add(f);
+      newModified.remove(f);
+      newUntracked.remove(f);
+    }
+    state = AsyncValue.data(base.copyWith(
+      stagedFiles: newStaged,
+      modifiedFiles: newModified,
+      untrackedFiles: newUntracked,
+      error: null,
+    ));
   }
 
   /// Unstage files
   Future<void> unstageFiles(List<String> files) async {
     debugPrint('[RepositoryStateNotifier] Unstaging ${files.length} files');
-    // TODO: Implement unstaging via GitIsolateManager
-    await _refreshStatus();
+    final base = state.value ?? RepositoryState(path: _repoPath);
+    final newStaged = [...base.stagedFiles];
+    final newModified = [...base.modifiedFiles];
+    for (final f in files) {
+      newStaged.remove(f);
+      if (!newModified.contains(f)) {
+        newModified.add(f);
+      }
+    }
+    state = AsyncValue.data(base.copyWith(
+      stagedFiles: newStaged,
+      modifiedFiles: newModified,
+      error: null,
+    ));
   }
 
   /// Commit changes
@@ -261,7 +300,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       }
 
       debugPrint('[RepositoryStateNotifier] Commit successful: ${result.data}');
-      await _refreshStatus();
+      // Refresh full repository state (status + history)
+      await _loadRepositoryState();
       return true;
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Commit failed: $e');
@@ -313,6 +353,28 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       return true;
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Fetch failed: $e');
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(error: e.toString()));
+      return false;
+    }
+  }
+
+  /// Pull (fast-forward only for now)
+  Future<bool> pull({String remote = 'origin', String? branch}) async {
+    final targetBranch = branch ?? state.value?.currentBranch ?? 'main';
+    debugPrint('[RepositoryStateNotifier] Pulling from $remote/$targetBranch');
+    try {
+      final result = await _gitManager.execute<void>(
+        PullCommand(_repoPath, remote, targetBranch),
+      );
+      if (!result.success) {
+        throw Exception(result.error ?? 'Pull failed');
+      }
+      debugPrint('[RepositoryStateNotifier] Pull successful');
+      await _loadRepositoryState();
+      return true;
+    } catch (e) {
+      debugPrint('[RepositoryStateNotifier] Pull failed: $e');
       final base = state.value ?? RepositoryState(path: _repoPath);
       state = AsyncValue.data(base.copyWith(error: e.toString()));
       return false;

@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:gitdesktop/core/git/libgit2_bindings.dart';
 
 /// Type definitions for libgit2 credential structures
 ///
@@ -65,6 +66,7 @@ class GitCredentialType {
 /// ```
 class CredentialsProvider {
   final String? personalAccessToken;
+  final String? username; // used for HTTPS username/password or PAT
   final String? sshPrivateKeyPath;
   final String? sshPublicKeyPath;
   final String? sshPassphrase;
@@ -73,6 +75,7 @@ class CredentialsProvider {
 
   CredentialsProvider({
     this.personalAccessToken,
+    this.username,
     this.sshPrivateKeyPath,
     this.sshPublicKeyPath,
     this.sshPassphrase,
@@ -117,10 +120,45 @@ class CredentialsProvider {
     int allowedTypes,
     Pointer<Void> payload,
   ) {
-    // TODO: Access instance data via payload pointer when FFI bindings are ready
-    // For now, return error
-    debugPrint('[CredentialsProvider] Static callback called (not yet fully implemented)');
-    return -1;
+    try {
+      // Resolve host from URL for registry lookup
+      final urlStr = url.address == 0 ? '' : url.toDartString();
+      final userFromUrl = usernameFromUrl.address == 0 ? '' : usernameFromUrl.toDartString();
+      final host = _parseHost(urlStr);
+      final provider = CredentialsRegistry.resolveForHost(host);
+      if (provider == null) {
+        debugPrint('[CredentialsProvider] No provider registered for host="$host" url="$urlStr"');
+        return -1;
+      }
+
+      // Decide which credential to create based on allowed types and provider
+      // Prefer HTTPS PAT when available and allowed
+      final allowUserpass = (allowedTypes & GitCredentialType.userpassPlaintext) != 0;
+      final allowSsh = (allowedTypes & GitCredentialType.sshKey) != 0 || (allowedTypes & GitCredentialType.sshMemory) != 0;
+
+      if (provider.personalAccessToken != null && (allowUserpass || (!allowSsh))) {
+        final user = (provider.username ?? userFromUrl).isEmpty ? 'git' : (provider.username ?? userFromUrl);
+        final pass = provider.personalAccessToken!;
+        return provider._createUsernamePasswordCredential(cred, user, pass);
+      }
+
+      if (provider.sshPrivateKeyPath != null && allowSsh) {
+        final user = userFromUrl.isNotEmpty ? userFromUrl : 'git';
+        return provider._createSshKeyCredential(
+          cred,
+          user,
+          provider.sshPublicKeyPath,
+          provider.sshPrivateKeyPath!,
+          provider.sshPassphrase ?? '',
+        );
+      }
+
+      debugPrint('[CredentialsProvider] Allowed types=$allowedTypes but no matching provider fields for host="$host"');
+      return -1;
+    } catch (e, st) {
+      debugPrint('[CredentialsProvider] Callback error: $e\n$st');
+      return -1;
+    }
   }
 
   /// Create username/password credential (used for HTTPS with PAT)
@@ -132,23 +170,20 @@ class CredentialsProvider {
     String password,
   ) {
     debugPrint('[CredentialsProvider] Creating userpass credential');
-
-    // TODO: Call actual FFI function when bindings are ready:
-    // final gitCredUserpassNew = DynamicLibraryService.library
-    //     .lookup<NativeFunction<GitCredUserpassNew>>('git_cred_userpass_plaintext_new');
-    //
-    // final usernamePtr = username.toNativeUtf8();
-    // final passwordPtr = password.toNativeUtf8();
-    //
-    // final result = gitCredUserpassNew(cred, usernamePtr, passwordPtr);
-    //
-    // malloc.free(usernamePtr);
-    // malloc.free(passwordPtr);
-    //
-    // return result;
-
-    // Mock success for now
-    return 0;
+    try {
+      final u = username.toNativeUtf8();
+      final p = password.toNativeUtf8();
+      try {
+        final rc = LibGit2Bindings.I.cred_userpass_plaintext_new(cred.cast(), u, p);
+        return rc;
+      } finally {
+        malloc.free(u);
+        malloc.free(p);
+      }
+    } catch (e) {
+      debugPrint('[CredentialsProvider] userpass credential error: $e');
+      return -1;
+    }
   }
 
   /// Create SSH key credential
@@ -162,33 +197,24 @@ class CredentialsProvider {
     String passphrase,
   ) {
     debugPrint('[CredentialsProvider] Creating SSH key credential');
-
-    // TODO: Call actual FFI function when bindings are ready:
-    // final gitCredSshKeyNew = DynamicLibraryService.library
-    //     .lookup<NativeFunction<GitCredSshKeyNew>>('git_cred_ssh_key_new');
-    //
-    // final usernamePtr = username.toNativeUtf8();
-    // final publicKeyPtr = publicKeyPath?.toNativeUtf8() ?? nullptr;
-    // final privateKeyPtr = privateKeyPath.toNativeUtf8();
-    // final passphrasePtr = passphrase.toNativeUtf8();
-    //
-    // final result = gitCredSshKeyNew(
-    //   cred,
-    //   usernamePtr,
-    //   publicKeyPtr,
-    //   privateKeyPtr,
-    //   passphrasePtr,
-    // );
-    //
-    // malloc.free(usernamePtr);
-    // if (publicKeyPtr != nullptr) malloc.free(publicKeyPtr);
-    // malloc.free(privateKeyPtr);
-    // malloc.free(passphrasePtr);
-    //
-    // return result;
-
-    // Mock success for now
-    return 0;
+    try {
+      final u = username.toNativeUtf8();
+      final pub = publicKeyPath != null ? publicKeyPath.toNativeUtf8() : Pointer<Utf8>.fromAddress(0);
+      final priv = privateKeyPath.toNativeUtf8();
+      final pass = passphrase.toNativeUtf8();
+      try {
+        final rc = LibGit2Bindings.I.cred_ssh_key_new(cred.cast(), u, pub, priv, pass);
+        return rc;
+      } finally {
+        malloc.free(u);
+        if (pub.address != 0) malloc.free(pub);
+        malloc.free(priv);
+        malloc.free(pass);
+      }
+    } catch (e) {
+      debugPrint('[CredentialsProvider] ssh credential error: $e');
+      return -1;
+    }
   }
 
   /// Cleanup the native callable
@@ -205,9 +231,9 @@ class CredentialsProvider {
 /// (flutter_secure_storage) or system keychain.
 class CredentialsFactory {
   /// Create provider with Personal Access Token
-  static Future<CredentialsProvider> createWithPAT(String token) async {
+  static Future<CredentialsProvider> createWithPAT(String token, {String? username}) async {
     // TODO: Validate token format
-    return CredentialsProvider(personalAccessToken: token);
+    return CredentialsProvider(personalAccessToken: token, username: username);
   }
 
   /// Create provider with SSH key
@@ -248,4 +274,50 @@ class CredentialsFactory {
     // await storage.write(key: 'git_pat_$repoUrl', value: token);
     debugPrint('[CredentialsFactory] Secure storage integration pending');
   }
+}
+
+/// In-memory session registry for credentials, keyed by host.
+/// This is isolate-local and intentionally ephemeral.
+class CredentialsRegistry {
+  static final Map<String, CredentialsProvider> _byHost = <String, CredentialsProvider>{};
+  static CredentialsProvider? _global;
+
+  /// Registers a provider for a specific host (e.g., github.com).
+  static void registerForHost(String host, CredentialsProvider provider) {
+    final key = host.trim().toLowerCase();
+    if (key.isEmpty) return;
+    _byHost[key] = provider;
+    debugPrint('[CredentialsRegistry] Registered provider for host="$key"');
+  }
+
+  /// Registers a global fallback provider used when no host-specific entry exists.
+  static void registerGlobal(CredentialsProvider provider) {
+    _global = provider;
+    debugPrint('[CredentialsRegistry] Registered global credentials provider');
+  }
+
+  /// Resolves the best provider for a URL or host.
+  static CredentialsProvider? resolveForUrl(String url) => resolveForHost(_parseHost(url));
+
+  static CredentialsProvider? resolveForHost(String host) {
+    final key = host.trim().toLowerCase();
+    final p = _byHost[key];
+    return p ?? _global;
+  }
+}
+
+String _parseHost(String url) {
+  if (url.isEmpty) return '';
+  try {
+    if (url.contains('://')) {
+      final u = Uri.parse(url);
+      return u.host;
+    }
+    final at = url.indexOf('@');
+    final colon = url.indexOf(':');
+    if (at != -1 && colon != -1 && colon > at) {
+      return url.substring(at + 1, colon);
+    }
+  } catch (_) {}
+  return '';
 }

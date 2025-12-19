@@ -82,14 +82,18 @@ Implementation Item 1 (Repository Management / MVP onboarding) — DONE ✅
   - Displays repo header (branch/head/dirty) and lists of changes
   - Actions: Refresh (wired), Commit/Stage/Unstage (mock stubs)
 
-Current Implementation Item 2 — IN PROGRESS 🚧
-- Clone/Create/Add flows + recent repos persistence
+Implementation Item 2 (Clone/Create/Add Flows) — DONE ✅
+- Clone/Create/Add flows wired with bottom sheets on Home
   - Clone via URL + destination path (mock isolate command)
   - Create new repository in folder (mock init command)
-  - Add existing repository (path validation minimal)
+  - Add existing repository (path validation via OpenRepo mock)
   - Persist recent repositories (shared_preferences; web-safe)
 
-Next Items (after 2):
-3. Commit workflow UI with diff viewer using DiffParser mock
+Current Implementation Item 3 — IN PROGRESS 🚧
+- Commit workflow UI with message composer
+- Stage/Unstage interactions in file lists (mock local state)
+- Diff viewer using DiffParser mock (up next)
+
+Next Items (after 3):
 4. Branch list + simple history list (mock rev-walk)
 5. Remote operations skeleton (push/fetch with credentials hook)
