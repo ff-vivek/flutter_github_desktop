@@ -51,20 +51,20 @@ class _HomePageState extends ConsumerState<HomePage> {
         child: SafeArea(
           child: Padding(
             padding: AppSpacing.paddingXl,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(),
-                const SizedBox(height: AppSpacing.xl),
-                _buildWelcomeCard(),
-                const SizedBox(height: AppSpacing.xl),
-                _buildOpenRepoCard(),
-                const SizedBox(height: AppSpacing.xl),
-                _buildQuickActionsCard(),
-                const SizedBox(height: AppSpacing.xl),
-                Expanded(child: _buildRepoArea()),
-                const SizedBox(height: AppSpacing.xl),
-                _buildRecentReposCard(),
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: _buildHeader()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+                SliverToBoxAdapter(child: _buildWelcomeCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+                SliverToBoxAdapter(child: _buildOpenRepoCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+                SliverToBoxAdapter(child: _buildQuickActionsCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+                SliverToBoxAdapter(child: _buildRepoArea()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+                SliverToBoxAdapter(child: _buildRecentReposCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
               ],
             ),
           ),
@@ -343,7 +343,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           const SizedBox(height: AppSpacing.lg),
           CommitComposer(),
           const SizedBox(height: AppSpacing.lg),
-          Flexible(child: _RepoChanges()),
+          SizedBox(height: 300, child: _RepoChanges()),
           const SizedBox(height: AppSpacing.lg),
           SizedBox(height: 260, child: _HistoryCard(commits: repo.commits)),
         ]);
@@ -386,38 +386,36 @@ class _HomePageState extends ConsumerState<HomePage> {
         color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(AppRadius.lg),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Technical Implementation', style: context.textStyles.titleLarge?.semiBold),
-            const SizedBox(height: AppSpacing.md),
-            _buildTechSection(
-              '1. GitIsolateManager',
-              'All FFI calls to libgit2 execute on a background isolate. Commands are sent via SendPort, processed without blocking the UI, and results are returned as pure Dart objects.',
-            ),
-            _buildTechSection(
-              '2. CredentialsProvider',
-              'Uses NativeCallable.isolateLocal() to create C-compatible function pointers. When libgit2 needs credentials, it calls the Dart callback which supplies a PAT or SSH key.',
-            ),
-            _buildTechSection(
-              '3. DynamicLibraryService',
-              'Conditionally loads libgit2.dll (Windows), libgit2.dylib (macOS), or libgit2.so (Linux) based on Platform checks.',
-            ),
-            _buildTechSection(
-              '4. DiffHunk & DiffLine Models',
-              'Pure Dart data classes. DiffParser walks git_diff pointers on the background isolate and converts them to List<DiffHunk> for safe UI rendering.',
-            ),
-            _buildTechSection(
-              '5. RepositoryStateNotifier',
-              'Riverpod StateNotifier that watches the filesystem. Implements 500ms debounce to prevent excessive git status checks during rapid file edits.',
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Center(
-              child: Text('See architecture.md for complete details', style: context.textStyles.bodySmall?.withColor(Theme.of(context).colorScheme.onSurfaceVariant)),
-            ),
-          ],
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Technical Implementation', style: context.textStyles.titleLarge?.semiBold),
+          const SizedBox(height: AppSpacing.md),
+          _buildTechSection(
+            '1. GitIsolateManager',
+            'All FFI calls to libgit2 execute on a background isolate. Commands are sent via SendPort, processed without blocking the UI, and results are returned as pure Dart objects.',
+          ),
+          _buildTechSection(
+            '2. CredentialsProvider',
+            'Uses NativeCallable.isolateLocal() to create C-compatible function pointers. When libgit2 needs credentials, it calls the Dart callback which supplies a PAT or SSH key.',
+          ),
+          _buildTechSection(
+            '3. DynamicLibraryService',
+            'Conditionally loads libgit2.dll (Windows), libgit2.dylib (macOS), or libgit2.so (Linux) based on Platform checks.',
+          ),
+          _buildTechSection(
+            '4. DiffHunk & DiffLine Models',
+            'Pure Dart data classes. DiffParser walks git_diff pointers on the background isolate and converts them to List<DiffHunk> for safe UI rendering.',
+          ),
+          _buildTechSection(
+            '5. RepositoryStateNotifier',
+            'Riverpod StateNotifier that watches the filesystem. Implements 500ms debounce to prevent excessive git status checks during rapid file edits.',
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Center(
+            child: Text('See architecture.md for complete details', style: context.textStyles.bodySmall?.withColor(Theme.of(context).colorScheme.onSurfaceVariant)),
+          ),
+        ],
       ),
     );
   }
