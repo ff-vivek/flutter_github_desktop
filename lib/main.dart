@@ -16,7 +16,13 @@ void main() async {
 
   // Initialize Git isolate manager (required before any Git operations)
   final gitManager = GitIsolateManager();
-  await gitManager.initialize();
+  // Skip isolate initialization on web to avoid unsupported errors
+  try {
+    await gitManager.initialize();
+  } catch (e) {
+    // Safety net; initialization method already avoids rethrow, but keep this just in case
+    debugPrint('[main] Git isolate init skipped/failed: $e');
+  }
 
   runApp(const ProviderScope(child: MyApp()));
 }

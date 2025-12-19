@@ -90,13 +90,21 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
   void initialize(String repoPath) {
     // Kept for compatibility if called manually; provider build handles normal init
     _repoPath = repoPath;
+    // Ensure we have a baseline state before async work starts
+    final base = state.value ?? RepositoryState(path: _repoPath);
+    state = AsyncValue.data(base.copyWith(path: _repoPath, isLoading: true, error: null));
     _loadRepositoryState();
     _startWatcher();
   }
 
   /// Load repository state from Git
   Future<void> _loadRepositoryState() async {
-    state = AsyncValue.data(state.value!.copyWith(isLoading: true, error: null));
+    if (_repoPath.isEmpty) {
+      debugPrint('[RepositoryStateNotifier] Repo path is empty. Skip load.');
+      return;
+    }
+    final base = state.value ?? RepositoryState(path: _repoPath);
+    state = AsyncValue.data(base.copyWith(isLoading: true, error: null));
 
     try {
       // Get repository info
@@ -133,7 +141,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       debugPrint('[RepositoryStateNotifier] Loaded: ${state.value!.changeCount} changes');
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Load failed: $e');
-      state = AsyncValue.data(state.value!.copyWith(
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(
         isLoading: false,
         error: e.toString(),
       ));
@@ -142,16 +151,23 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
 
   /// Start watching the repository directory for changes
   void _startWatcher() {
+    // Directory watching is not supported on Flutter web.
+    if (kIsWeb) {
+      debugPrint('[RepositoryStateNotifier] Web detected: directory watching disabled.');
+      return;
+    }
     try {
+      if (_repoPath.isEmpty) {
+        debugPrint('[RepositoryStateNotifier] Cannot start watcher: repo path is empty');
+        return;
+      }
       _watcher = DirectoryWatcher(_repoPath);
-
       _watcherSubscription = _watcher!.events.listen(
         _onFileSystemEvent,
         onError: (error) {
           debugPrint('[RepositoryStateNotifier] Watcher error: $error');
         },
       );
-
       debugPrint('[RepositoryStateNotifier] Watcher started');
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Failed to start watcher: $e');
@@ -194,8 +210,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       }
 
       final statusData = statusResult.data!;
-
-      state = AsyncValue.data(state.value!.copyWith(
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(
         modifiedFiles: List<String>.from(statusData['modifiedFiles'] ?? []),
         stagedFiles: List<String>.from(statusData['stagedFiles'] ?? []),
         untrackedFiles: List<String>.from(statusData['untrackedFiles'] ?? []),
@@ -205,7 +221,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       debugPrint('[RepositoryStateNotifier] Status refreshed: ${state.value!.changeCount} changes');
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Refresh failed: $e');
-      state = AsyncValue.data(state.value!.copyWith(error: e.toString()));
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(error: e.toString()));
     }
   }
 
@@ -234,8 +251,9 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
     debugPrint('[RepositoryStateNotifier] Committing: $message');
 
     try {
+      final staged = state.value?.stagedFiles ?? const <String>[];
       final result = await _gitManager.execute<String>(
-        CommitCommand(_repoPath, message, state.value!.stagedFiles),
+        CommitCommand(_repoPath, message, staged),
       );
 
       if (!result.success) {
@@ -247,14 +265,15 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       return true;
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Commit failed: $e');
-      state = AsyncValue.data(state.value!.copyWith(error: e.toString()));
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(error: e.toString()));
       return false;
     }
   }
 
   /// Push to remote
   Future<bool> push({String remote = 'origin', String? branch}) async {
-    final targetBranch = branch ?? state.value!.currentBranch ?? 'main';
+    final targetBranch = branch ?? state.value?.currentBranch ?? 'main';
     debugPrint('[RepositoryStateNotifier] Pushing to $remote/$targetBranch');
 
     try {
@@ -270,7 +289,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       return true;
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Push failed: $e');
-      state = AsyncValue.data(state.value!.copyWith(error: e.toString()));
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(error: e.toString()));
       return false;
     }
   }
@@ -293,7 +313,8 @@ class RepositoryStateNotifier extends AsyncNotifier<RepositoryState> {
       return true;
     } catch (e) {
       debugPrint('[RepositoryStateNotifier] Fetch failed: $e');
-      state = AsyncValue.data(state.value!.copyWith(error: e.toString()));
+      final base = state.value ?? RepositoryState(path: _repoPath);
+      state = AsyncValue.data(base.copyWith(error: e.toString()));
       return false;
     }
   }

@@ -139,6 +139,13 @@ class GitIsolateManager {
   /// Must be called before executing any commands.
   /// Safe to call multiple times (idempotent).
   Future<void> initialize() async {
+    // Web preview (Dreamflow) does not support dart:isolate or dart:ffi.
+    // Gracefully no-op so the UI stays usable.
+    if (kIsWeb) {
+      debugPrint('[GitIsolateManager] Web detected: isolates/FFI disabled. Skipping initialization.');
+      _isInitialized = false;
+      return;
+    }
     if (_isInitialized) {
       debugPrint('[GitIsolateManager] Already initialized');
       return;
@@ -177,7 +184,7 @@ class GitIsolateManager {
     } catch (e) {
       debugPrint('[GitIsolateManager] Initialization failed: $e');
       await dispose();
-      rethrow;
+      // Do not rethrow to avoid crashing app startup.
     }
   }
 
@@ -186,8 +193,14 @@ class GitIsolateManager {
   /// Returns a GitResult with either success data or error message.
   /// Throws if isolate is not initialized.
   Future<GitResult<T>> execute<T>(GitCommand command) async {
+    // Web fallback: report unsupported features via failure result
+    if (kIsWeb) {
+      debugPrint('[GitIsolateManager] Command on web is unsupported: ${command.runtimeType}');
+      return GitResult<T>.failure('Git operations are unavailable in web preview. Please run on macOS/Windows/Linux.');
+    }
     if (!_isInitialized || _sendPort == null) {
-      throw StateError('GitIsolateManager not initialized. Call initialize() first.');
+      debugPrint('[GitIsolateManager] Not initialized; rejecting ${command.runtimeType}');
+      return GitResult<T>.failure('GitIsolateManager not initialized.');
     }
 
     final replyPort = ReceivePort();
